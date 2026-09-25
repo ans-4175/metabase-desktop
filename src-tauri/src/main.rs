@@ -7,6 +7,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::net::TcpListener;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -74,14 +75,22 @@ fn load_config(data_dir: &PathBuf) -> (u16, String) {
 
 // ---------- path helpers ----------
 
+fn java_rel() -> &'static str {
+    if cfg!(windows) {
+        "resources/runtime/bin/java.exe"
+    } else {
+        "resources/runtime/bin/java"
+    }
+}
+
 fn java_bin(app: &AppHandle) -> Option<PathBuf> {
-    if let Ok(p) = app.path().resolve("resources/runtime/bin/java", BaseDirectory::Resource) {
+    if let Ok(p) = app.path().resolve(java_rel(), BaseDirectory::Resource) {
         if p.exists() {
             return Some(p);
         }
     }
     // dev fallback: run via `just dev` from project root
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/runtime/bin/java");
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(java_rel());
     dev.exists().then_some(dev)
 }
 
@@ -425,23 +434,32 @@ fn open_main(app: &AppHandle, port: u16) {
 fn stop_backend(state: &AppState) {
     let mut guard = state.child.lock().unwrap();
     if let Some(mut child) = guard.take() {
-        // SIGTERM dulu biar Metabase shutdown bersih (H2 flush)
-        unsafe {
-            libc::kill(child.id() as i32, libc::SIGTERM);
-        }
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) | Err(_) => break,
-                Ok(None) => {
-                    if Instant::now() > deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
+        #[cfg(unix)]
+        {
+            // SIGTERM dulu biar Metabase shutdown bersih (H2 flush)
+            unsafe {
+                libc::kill(child.id() as i32, libc::SIGTERM);
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) | Err(_) => break,
+                    Ok(None) => {
+                        if Instant::now() > deadline {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(200));
                     }
-                    std::thread::sleep(Duration::from_millis(200));
                 }
             }
+        }
+        #[cfg(windows)]
+        {
+            // Windows: no SIGTERM — TerminateProcess langsung
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }

@@ -1,0 +1,59 @@
+name: Release
+
+# Build native installers for macOS / Windows / Linux and attach them to a
+# draft GitHub Release.
+# Trigger: push a tag like v0.1.0 — or run manually from the Actions tab.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14 # Apple Silicon
+            fetch: bash scripts/fetch-jre.sh
+          - platform: ubuntu-22.04
+            fetch: bash scripts/fetch-jre.sh
+          - platform: windows-latest
+            fetch: pwsh scripts/fetch-jre.ps1
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies (Tauri v2)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Fetch bundled JRE
+        run: ${{ matrix.fetch }}
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: metabase-desktop-v__VERSION__
+          releaseName: "Metabase Desktop v__VERSION__"
+          releaseBody: "Installers with a bundled JRE 21 — no Java install needed. The Metabase JAR (~640MB) is fetched automatically on first launch. macOS build is Apple Silicon for now."
+          releaseDraft: true
+          prerelease: false
