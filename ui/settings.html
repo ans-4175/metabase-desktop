@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Settings</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      height: 100vh; display: flex; align-items: center; justify-content: center;
+    }
+    .card { width: 100%; padding: 24px 28px; }
+    h1 { font-size: 15px; font-weight: 600; margin-bottom: 18px; }
+    label { display: block; font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom: 16px; }
+    input {
+      display: block; width: 100%; margin-top: 6px;
+      background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+      color: #e2e8f0; font-size: 13px; padding: 8px 10px; outline: none;
+    }
+    input:focus { border-color: #34d399; }
+    small { display: block; margin-top: 5px; font-weight: 400; font-size: 11px; color: #64748b; }
+    .row { display: flex; gap: 10px; margin-top: 20px; }
+    button {
+      background: #34d399; border: none; color: #052e1b; font-weight: 600;
+      font-size: 13px; padding: 8px 20px; border-radius: 8px; cursor: pointer;
+    }
+    button:hover { background: #6ee7b7; }
+    button.ghost { background: transparent; border: 1px solid #334155; color: #94a3b8; }
+    button.ghost:hover { border-color: #64748b; color: #e2e8f0; }
+    #status { font-size: 12px; min-height: 16px; margin-top: 12px; color: #94a3b8; }
+    #status.ok { color: #34d399; }
+    #status.err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Settings</h1>
+    <label>Local port
+      <input id="port" type="number" min="1024" max="65535" />
+      <small>Metabase serves on 127.0.0.1 — default 9010. Fails fast if taken.</small>
+    </label>
+    <label>Max memory (JVM heap)
+      <input id="xmx" list="xmxlist" placeholder="1g" />
+      <datalist id="xmxlist">
+        <option>512m</option>
+        <option>768m</option>
+        <option>1g</option>
+        <option>1500m</option>
+        <option>2g</option>
+      </datalist>
+      <small>-Xmx ceiling, not a reservation — idle Metabase uses ~300–500MB.</small>
+    </label>
+    <div class="row">
+      <button id="save">Save &amp; Restart</button>
+      <button id="cancel" class="ghost">Cancel</button>
+    </div>
+    <p id="status"></p>
+  </div>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const port = document.getElementById('port');
+    const xmx = document.getElementById('xmx');
+    const status = document.getElementById('status');
+
+    invoke('get_config').then((c) => {
+      port.value = c.port;
+      xmx.value = c.xmx;
+    });
+
+    document.getElementById('save').addEventListener('click', async () => {
+      status.textContent = 'Saving…';
+      status.className = '';
+      try {
+        await invoke('save_config', { port: Number(port.value), xmx: xmx.value });
+        status.textContent = 'Saved ✓ Backend is restarting…';
+        status.className = 'ok';
+        setTimeout(() => window.close(), 1200);
+      } catch (e) {
+        status.textContent = String(e);
+        status.className = 'err';
+      }
+    });
+
+    document.getElementById('cancel').addEventListener('click', () => window.close());
+  </script>
+</body>
+</html>

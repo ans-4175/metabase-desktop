@@ -14,7 +14,7 @@
         "title": "Metabase Desktop",
         "url": "index.html",
         "width": 440,
-        "height": 300,
+        "height": 340,
         "resizable": false,
         "center": true
       }
@@ -28,7 +28,6 @@
     "targets": ["app", "dmg"],
     "icon": ["icons/icon.icns", "icons/icon.png"],
     "resources": {
-      "resources/metabase.jar": "resources/metabase.jar",
       "resources/runtime/": "resources/runtime/"
     },
     "macOS": {

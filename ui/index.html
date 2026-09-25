@@ -15,16 +15,19 @@
     .card { text-align: center; padding: 24px; width: 100%; }
     .logo { font-size: 40px; margin-bottom: 12px; }
     h1 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+    .tagline { font-size: 11px; color: #64748b; line-height: 1.55; margin-bottom: 12px; }
     #status { font-size: 12.5px; color: #94a3b8; min-height: 18px; }
     .bar {
       width: 220px; height: 4px; background: #1e293b;
       border-radius: 99px; margin: 16px auto 0; overflow: hidden;
     }
     .bar-fill {
-      width: 40%; height: 100%; background: #34d399; border-radius: 99px;
-      animation: slide 1.2s ease-in-out infinite;
+      width: 100%; height: 100%; border-radius: 99px;
+      background: linear-gradient(90deg, transparent, #34d399, transparent);
+      transform: translateX(-100%);
+      animation: slide 1.4s linear infinite;
     }
-    @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
+    @keyframes slide { to { transform: translateX(100%); } }
     .error { margin-top: 14px; }
     #error-msg {
       font-size: 12px; color: #f87171; max-width: 380px;
@@ -42,7 +45,8 @@
   <div class="card">
     <div class="logo">🗃️</div>
     <h1>Metabase Desktop</h1>
-    <p id="status">Menyalakan Metabase… biasanya 15–40 detik.</p>
+    <p class="tagline">No JDK. No setup. No terminal.<br/>The JVM rides in the box &amp; Metabase fetches itself. Just open &amp; query.</p>
+    <p id="status">Starting Metabase… usually takes 15–40s.</p>
     <div class="bar" id="bar"><div class="bar-fill"></div></div>
     <div class="error hidden" id="error">
       <p id="error-msg"></p>
@@ -54,27 +58,50 @@
     const { invoke } = window.__TAURI__.core;
     const statusEl = document.getElementById('status');
     const bar = document.getElementById('bar');
+    const barFill = bar.querySelector('.bar-fill');
     const errorBox = document.getElementById('error');
     const errorMsg = document.getElementById('error-msg');
+
+    const setIndeterminate = () => {
+      barFill.style.animation = '';
+      barFill.style.width = '';
+      barFill.style.transform = '';
+      barFill.style.background = '';
+    };
 
     listen('backend-status', (e) => {
       statusEl.textContent = e.payload;
       bar.classList.remove('hidden');
+      setIndeterminate();
+    });
+    listen('update-status', (e) => { statusEl.textContent = e.payload; });
+    listen('update-progress', (e) => {
+      const { received, total } = e.payload;
+      barFill.style.animation = 'none';
+      barFill.style.transform = 'none';
+      barFill.style.background = '#34d399';
+      if (total) {
+        const p = Math.min(100, (received / total) * 100);
+        barFill.style.width = p + '%';
+        statusEl.textContent = `Downloading metabase.jar… ${p.toFixed(0)}% (${(received / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)} MB)`;
+      } else {
+        statusEl.textContent = `Downloading metabase.jar… ${(received / 1048576).toFixed(0)} MB`;
+      }
     });
     listen('backend-error', (e) => {
-      statusEl.textContent = 'Gagal menyalakan Metabase.';
+      statusEl.textContent = 'Failed to start Metabase.';
       errorMsg.textContent = e.payload;
       bar.classList.add('hidden');
       errorBox.classList.remove('hidden');
     });
     listen('backend-ready', () => {
-      statusEl.textContent = 'Siap! Membuka jendela…';
+      statusEl.textContent = 'Ready! Opening window…';
       bar.classList.add('hidden');
     });
 
     document.getElementById('retry').addEventListener('click', () => {
       errorBox.classList.add('hidden');
-      statusEl.textContent = 'Menyalakan ulang Metabase…';
+      statusEl.textContent = 'Restarting Metabase…';
       bar.classList.remove('hidden');
       invoke('retry_backend');
     });

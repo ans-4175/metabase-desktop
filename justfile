@@ -1,11 +1,11 @@
 default:
     @just --list
 
-# Download metabase.jar + JRE ke src-tauri/resources/ (wajib sebelum build)
-setup: fetch-jar fetch-jre
-    @echo ">> Setup lengkap. Lanjut: just dev (coba jalan) atau just build (.app)"
+# Download the JRE into src-tauri/resources/ (the only required pre-build step)
+setup: fetch-jre
+    @echo ">> JRE setup done. metabase.jar is auto-downloaded on first app launch."
 
-# Download metabase.jar pinned (override: METABASE_VERSION=0.64.0 just fetch-jar)
+# (Optional) manually download metabase.jar — for offline pre-seed / dev fallback
 fetch-jar:
     bash scripts/fetch-jar.sh
 
@@ -13,11 +13,11 @@ fetch-jar:
 fetch-jre:
     bash scripts/fetch-jre.sh
 
-# Update metabase.jar ke versi terbaru lalu rebuild
+# (Opsional) refresh jar di resources buat dev fallback
 update-jar:
     METABASE_VERSION=latest bash scripts/fetch-jar.sh
 
-# Jalankan app mode dev
+# Run the app in dev mode
 dev:
     npx --yes @tauri-apps/cli@^2 dev
 
@@ -25,10 +25,10 @@ dev:
 build:
     npx --yes @tauri-apps/cli@^2 build
 
-# Regenerate icon set dari src-tauri/icons/app-icon.png
+# Regenerate icon set from src-tauri/icons/app-icon.png
 icon:
     npx --yes @tauri-apps/cli@^2 icon src-tauri/icons/app-icon.png
 
-# Hapus semua data + app Metabase Desktop dari mesin ini
+# Remove all Metabase Desktop data + app from this machine
 uninstall:
     bash scripts/uninstall.sh

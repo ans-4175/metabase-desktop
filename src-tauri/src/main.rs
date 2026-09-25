@@ -18,6 +18,7 @@ use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 const DEFAULT_PORT: u16 = 9010;
 const DEFAULT_XMX: &str = "1g";
@@ -39,7 +40,7 @@ fn load_config(data_dir: &PathBuf) -> (u16, String) {
     if !cfg_path.exists() {
         let _ = fs::write(
             &cfg_path,
-            "# Metabase Desktop - config\n# Edit lalu pilih menu 'Restart Backend' untuk apply.\n\n# PORT=9010\n# XMX=1g\n",
+            "# Metabase Desktop - config\n# Edit and save — the backend restarts automatically.\n\n# PORT=9010\n# XMX=1g\n",
         );
     }
     if let Ok(content) = fs::read_to_string(&cfg_path) {
@@ -89,12 +90,74 @@ fn baked_jar(app: &AppHandle) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/metabase.jar");
-    dev.exists().then_some(dev)
+    None
 }
 
 fn port_free(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+fn jar_available(app: &AppHandle, data_dir: &PathBuf) -> bool {
+    data_dir.join("metabase.jar").exists() || baked_jar(app).is_some()
+}
+
+// Download metabase.jar latest ke `dest` (atomic: tulis ke .download dulu, rename kalau sukses)
+async fn download_jar(app: &AppHandle, dest: &PathBuf) -> Result<(), String> {
+    let _ = app.emit("update-status", "Menghubungkan ke downloads.metabase.com…".to_string());
+    let client = reqwest::Client::new();
+    let mut resp = client
+        .get(METABASE_LATEST_URL)
+        .send()
+        .await
+        .map_err(|e| format!("Gagal download: {e}"))?;
+    let total = resp.content_length();
+    let tmp = dest.with_extension("jar.download");
+    let mut file = File::create(&tmp).map_err(|e| format!("Gagal tulis file: {e}"))?;
+    let mut received: u64 = 0;
+    let mut last_emit = Instant::now();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                file.write_all(&chunk)
+                    .map_err(|e| format!("Gagal tulis file: {e}"))?;
+                received += chunk.len() as u64;
+                if last_emit.elapsed() > Duration::from_millis(200) {
+                    last_emit = Instant::now();
+                    let _ = app.emit("update-progress", json!({"received": received, "total": total}));
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                let _ = fs::remove_file(&tmp);
+                return Err(format!("Download terputus: {e}"));
+            }
+        }
+    }
+    drop(file);
+    let _ = app.emit("update-progress", json!({"received": received, "total": total}));
+    let _ = fs::remove_file(dest);
+    fs::rename(&tmp, dest).map_err(|e| format!("Gagal finalisasi jar: {e}"))?;
+    Ok(())
+}
+
+// Watch config.env — tiap user save editan, backend otomatis restart
+fn spawn_config_watcher(app: AppHandle) {
+    std::thread::spawn(move || {
+        let cfg = app.state::<AppState>().data_dir.join("config.env");
+        let mtime = || fs::metadata(&cfg).and_then(|m| m.modified()).ok();
+        let mut last = mtime();
+        loop {
+            std::thread::sleep(Duration::from_millis(1500));
+            let cur = mtime();
+            if cur.is_some() && cur != last {
+                // debounce: tunggu user beneran selesai edit
+                std::thread::sleep(Duration::from_millis(2000));
+                last = mtime();
+                let _ = app.emit("backend-status", "Config berubah — restart backend…".to_string());
+                restart_backend(&app);
+            }
+        }
+    });
 }
 
 // ---------- backend lifecycle ----------
@@ -119,13 +182,13 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
 
     if !port_free(port) {
         let msg = format!(
-            "Port {port} sudah dipakai proses lain.\nUbah PORT di config.env (menu: Edit Settings) atau matikan prosesnya."
+            "Port {port} is already in use by another process.\nChange PORT in config.env (menu: Settings) or stop that process."
         );
         return Err(msg);
     }
 
     let java = java_bin(app)
-        .ok_or_else(|| "Bundled JRE tidak ditemukan. Jalankan: just fetch-jre".to_string())?;
+        .ok_or_else(|| "Bundled JRE not found. Run: just fetch-jre".to_string())?;
     #[cfg(unix)]
     {
         let _ = fs::set_permissions(&java, fs::Permissions::from_mode(0o755));
@@ -138,7 +201,7 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
             p
         } else {
             baked_jar(app)
-                .ok_or_else(|| "metabase.jar tidak ditemukan. Jalankan: just fetch-jar".to_string())?
+                .ok_or_else(|| "metabase.jar not found in data folder or resources".to_string())?
         }
     };
 
@@ -148,7 +211,7 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
         .create(true)
         .append(true)
         .open(logs_dir.join("metabase.log"))
-        .map_err(|e| format!("Gagal buka log file: {e}"))?;
+        .map_err(|e| format!("Failed to open log file: {e}"))?;
     let err_log = log.try_clone().map_err(|e| e.to_string())?;
 
     let child = Command::new(&java)
@@ -164,12 +227,12 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(err_log))
         .spawn()
-        .map_err(|e| format!("Gagal spawn Java: {e}"))?;
+        .map_err(|e| format!("Failed to launch Java: {e}"))?;
 
     *state.child.lock().unwrap() = Some(child);
     drop(state);
 
-    let _ = app.emit("backend-status", "Menyalakan Metabase… biasanya 15–40 detik.");
+    let _ = app.emit("backend-status", "Starting Metabase… usually takes 15–40s.");
 
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -190,7 +253,7 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
                         drop(guard);
                         let _ = handle.emit(
                             "backend-error",
-                            "Proses Metabase mati mendadak.\nCek logs/metabase.log di data folder (menu: Reveal Data Folder).",
+                            "The Metabase process died unexpectedly.\nCheck logs/metabase.log in the data folder (menu: Reveal Data Folder).",
                         );
                         return;
                     }
@@ -226,7 +289,7 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
                                 let _ = handle.emit(
                                     "backend-status",
                                     format!(
-                                        "Metabase menginisialisasi database… {}s",
+                                        "Metabase is initializing the database… {}s",
                                         started.elapsed().as_secs()
                                     ),
                                 );
@@ -239,7 +302,7 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
             if started.elapsed() > Duration::from_secs(180) {
                 let _ = handle.emit(
                     "backend-error",
-                    "Timeout: Metabase tidak siap dalam 3 menit.\nCek logs/metabase.log di data folder.",
+                    "Timeout: Metabase isn't ready after 3 minutes.\nCheck logs/metabase.log in the data folder.",
                 );
                 return;
             }
@@ -247,7 +310,7 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
                 last_status = Instant::now();
                 let _ = handle.emit(
                     "backend-status",
-                    format!("Masih menyalakan… {}s", started.elapsed().as_secs()),
+                    format!("Still starting… {}s", started.elapsed().as_secs()),
                 );
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -259,7 +322,8 @@ fn spawn_backend(app: &AppHandle) -> Result<(), String> {
 fn open_main(app: &AppHandle, port: u16) {
     match app.get_webview_window("main") {
         Some(win) => {
-            let _ = win.eval("location.reload()");
+            // navigate (bukan cuma reload) — support PORT berubah lewat config
+            let _ = win.eval(&format!("location.href = 'http://127.0.0.1:{port}/'"));
         }
         None => {
             let url: tauri::Url = format!("http://127.0.0.1:{port}/").parse().expect("url");
@@ -314,7 +378,7 @@ fn restart_backend(app: &AppHandle) {
     drop(state);
     let _ = app.emit(
         "backend-status",
-        format!("Menyalakan ulang Metabase (Xmx {xmx}, port {port})…"),
+        format!("Restarting Metabase (Xmx {xmx}, port {port})…"),
     );
     if let Err(e) = spawn_backend(app) {
         let _ = app.emit("backend-error", e);
@@ -328,78 +392,25 @@ async fn run_update(app: AppHandle) {
         let st = app.state::<AppState>();
         st.data_dir.clone()
     };
-    let _ = app.emit("update-status", "Mengunduh metabase.jar terbaru…".to_string());
-
-    let client = reqwest::Client::new();
-    match client.get(METABASE_LATEST_URL).send().await {
-        Ok(mut resp) => {
-            let total = resp.content_length();
-            let tmp = data_dir.join("metabase.jar.download");
-            match File::create(&tmp) {
-                Ok(mut file) => {
-                    let mut received: u64 = 0;
-                    let mut last_emit = Instant::now();
-                    let mut ok = true;
-                    loop {
-                        match resp.chunk().await {
-                            Ok(Some(chunk)) => {
-                                if file.write_all(&chunk).is_err() {
-                                    ok = false;
-                                    break;
-                                }
-                                received += chunk.len() as u64;
-                                if last_emit.elapsed() > Duration::from_millis(200) {
-                                    last_emit = Instant::now();
-                                    let _ = app.emit(
-                                        "update-progress",
-                                        json!({"received": received, "total": total}),
-                                    );
-                                }
-                            }
-                            Ok(None) => break,
-                            Err(_) => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    let _ = app.emit(
-                        "update-progress",
-                        json!({"received": received, "total": total}),
-                    );
-                    if ok {
-                        let final_path = data_dir.join("metabase.jar");
-                        let _ = fs::remove_file(&final_path);
-                        if fs::rename(&tmp, &final_path).is_ok() {
-                            let _ = app.emit(
-                                "update-status",
-                                "Selesai didownload. Restart backend dengan versi baru…".to_string(),
-                            );
-                            // stop_backend pake std sleep — jangan blok async worker
-                            let app2 = app.clone();
-                            let _ = tauri::async_runtime::spawn_blocking(move || {
-                                restart_backend(&app2)
-                            });
-                            return;
-                        }
-                    }
-                }
-                Err(e) => {
-                    let _ = app.emit("update-status", format!("Gagal tulis file: {e}"));
-                }
-            }
+    match download_jar(&app, &data_dir.join("metabase.jar")).await {
+        Ok(()) => {
+            let _ = app.emit(
+                "update-status",
+                "Download complete. Restarting backend with the new version…".to_string(),
+            );
+            // stop_backend pake std sleep — jangan blok async worker
+            let app2 = app.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || restart_backend(&app2));
         }
         Err(e) => {
-            let _ = app.emit("update-status", format!("Gagal download: {e}"));
+            let _ = app.emit(
+                "update-status",
+                format!("Update failed: {e}\nMetabase keeps running on the old version."),
+            );
+            if let Some(w) = app.get_webview_window("updater") {
+                let _ = w.close();
+            }
         }
-    }
-    let _ = fs::remove_file(data_dir.join("metabase.jar.download"));
-    let _ = app.emit(
-        "update-status",
-        "Update gagal. Metabase lanjut jalan pakai versi lama.".to_string(),
-    );
-    if let Some(w) = app.get_webview_window("updater") {
-        let _ = w.close();
     }
 }
 
@@ -409,11 +420,89 @@ async fn run_update(app: AppHandle) {
 fn retry_backend(app: AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let _ = handle.emit("backend-status", "Menyalakan ulang Metabase…");
+        let _ = handle.emit("backend-status", "Starting Metabase…");
+        let data_dir = handle.state::<AppState>().data_dir.clone();
+        if !jar_available(&handle, &data_dir) {
+            let _ = handle.emit("backend-status", "Downloading metabase.jar…".to_string());
+            if let Err(e) = download_jar(&handle, &data_dir.join("metabase.jar")).await {
+                let _ = handle.emit("backend-error", e);
+                return;
+            }
+        }
         if let Err(e) = spawn_backend(&handle) {
             let _ = handle.emit("backend-error", e);
         }
     });
+}
+
+// ---------- settings ----------
+
+#[derive(serde::Serialize)]
+struct ConfigView {
+    port: u16,
+    xmx: String,
+}
+
+#[tauri::command]
+fn get_config(app: AppHandle) -> ConfigView {
+    let st = app.state::<AppState>();
+    let port = *st.port.lock().unwrap();
+    let xmx = st.xmx.lock().unwrap().clone();
+    ConfigView { port, xmx }
+}
+
+// rewrite config.env while preserving comments & unknown keys
+fn update_config_file(data_dir: &PathBuf, port: &str, xmx: &str) -> std::io::Result<()> {
+    let path = data_dir.join("config.env");
+    let mut lines: Vec<String> = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect();
+    let (mut port_done, mut xmx_done) = (false, false);
+    for line in lines.iter_mut() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if let Some((k, _)) = t.split_once('=') {
+            match k.trim().to_ascii_uppercase().as_str() {
+                "PORT" => {
+                    *line = format!("PORT={port}");
+                    port_done = true;
+                }
+                "XMX" => {
+                    *line = format!("XMX={xmx}");
+                    xmx_done = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    if !port_done {
+        lines.push(format!("PORT={port}"));
+    }
+    if !xmx_done {
+        lines.push(format!("XMX={xmx}"));
+    }
+    std::fs::write(&path, lines.join("\n") + "\n")
+}
+
+#[tauri::command]
+fn save_config(app: AppHandle, port: u16, xmx: String) -> Result<(), String> {
+    if !(1024..=65535).contains(&port) {
+        return Err("Port must be between 1024 and 65535".to_string());
+    }
+    let x = xmx.trim().to_lowercase();
+    let ok_x = x.len() >= 2
+        && matches!(x.chars().last(), Some('m') | Some('g'))
+        && x[..x.len() - 1].chars().all(|c| c.is_ascii_digit())
+        && x[..x.len() - 1].parse::<u32>().map(|n| n > 0).unwrap_or(false);
+    if !ok_x {
+        return Err("Memory must look like 512m, 1g, 2g…".to_string());
+    }
+    let st = app.state::<AppState>();
+    update_config_file(&st.data_dir, &port.to_string(), &x).map_err(|e| e.to_string())
 }
 
 // ---------- main ----------
@@ -421,7 +510,12 @@ fn retry_backend(app: AppHandle) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![retry_backend])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            retry_backend,
+            get_config,
+            save_config
+        ])
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("no app data dir");
             fs::create_dir_all(&data_dir).expect("cannot create data dir");
@@ -429,19 +523,21 @@ fn main() {
 
             // --- native menu (macOS) ---
             let about =
-                PredefinedMenuItem::about(app, Some("Tentang Metabase Desktop"), None::<AboutMetadata>)?;
+                PredefinedMenuItem::about(app, Some("About Metabase Desktop"), None::<AboutMetadata>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
-            let check = MenuItem::with_id(app, "check-updates", "Cek Update Metabase…", true, None::<&str>)?;
+            let check = MenuItem::with_id(app, "check-updates", "Check for Metabase Updates…", true, None::<&str>)?;
             let restart = MenuItem::with_id(app, "restart-backend", "Restart Backend", true, None::<&str>)?;
-            let settings = MenuItem::with_id(app, "edit-settings", "Edit Settings…", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
             let reveal = MenuItem::with_id(app, "reveal-data", "Reveal Data Folder", true, None::<&str>)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
-            let quit = PredefinedMenuItem::quit(app, Some("Keluar"))?;
+            let uninstall =
+                MenuItem::with_id(app, "uninstall", "Uninstall Metabase Desktop…", true, None::<&str>)?;
+            let quit = PredefinedMenuItem::quit(app, Some("Quit"))?;
             let app_menu = Submenu::with_items(
                 app,
                 "Metabase Desktop",
                 true,
-                &[&about, &sep1, &check, &restart, &settings, &reveal, &sep2, &quit],
+                &[&about, &sep1, &check, &restart, &settings, &reveal, &sep2, &uninstall, &quit],
             )?;
 
             let edit_menu = Submenu::new(app, "Edit", true)?;
@@ -459,6 +555,7 @@ fn main() {
             let menu = Menu::with_items(app, &[&app_menu, &edit_menu])?;
             app.set_menu(menu)?;
 
+            let data_dir_for_boot = data_dir.clone();
             app.manage(AppState {
                 child: Mutex::new(None),
                 data_dir,
@@ -467,8 +564,22 @@ fn main() {
             });
 
             let handle = app.handle().clone();
+            spawn_config_watcher(handle.clone());
             tauri::async_runtime::spawn(async move {
-                let _ = handle.emit("backend-status", "Menyiapkan environment…");
+                let _ = handle.emit("backend-status", "Preparing environment…");
+                // preflight: tanpa jar di mana-mana → download sekali di awal
+                if !jar_available(&handle, &data_dir_for_boot) {
+                    let _ = handle.emit(
+                        "backend-status",
+                        "First run: downloading metabase.jar (~640MB) — one time only…".to_string(),
+                    );
+                    if let Err(e) =
+                        download_jar(&handle, &data_dir_for_boot.join("metabase.jar")).await
+                    {
+                        let _ = handle.emit("backend-error", e);
+                        return;
+                    }
+                }
                 if let Err(e) = spawn_backend(&handle) {
                     let _ = handle.emit("backend-error", e);
                 }
@@ -485,7 +596,7 @@ fn main() {
                             "updater",
                             WebviewUrl::App("updater.html".into()),
                         )
-                        .title("Update Metabase")
+                        .title("Metabase Update")
                         .inner_size(420.0, 180.0)
                         .resizable(false)
                         .center()
@@ -499,9 +610,52 @@ fn main() {
                 let dir = app.state::<AppState>().data_dir.display().to_string();
                 let _ = app.opener().open_path(dir, None::<&str>);
             }
-            "edit-settings" => {
-                let cfg = app.state::<AppState>().data_dir.join("config.env");
-                let _ = Command::new("open").arg("-t").arg(&cfg).spawn();
+            "settings" => {
+                match app.get_webview_window("settings") {
+                    Some(w) => {
+                        let _ = w.set_focus();
+                    }
+                    None => {
+                        let _ = WebviewWindowBuilder::new(
+                            app,
+                            "settings",
+                            WebviewUrl::App("settings.html".into()),
+                        )
+                        .title("Settings — Metabase Desktop")
+                        .inner_size(420.0, 400.0)
+                        .resizable(false)
+                        .center()
+                        .build();
+                    }
+                }
+            }
+            "uninstall" => {
+                let confirmed = app
+                    .dialog()
+                    .message("Delete ALL Metabase Desktop data (database, settings, logs) and remove this app?\nThis action cannot be undone.")
+                    .title("Uninstall Metabase Desktop")
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Delete Permanently".to_string(),
+                        "Cancel".to_string(),
+                    ))
+                    .blocking_show();
+                if confirmed {
+                    let state = app.state::<AppState>();
+                    let data_dir = state.data_dir.clone();
+                    stop_backend(&state);
+                    drop(state);
+                    let _ = fs::remove_dir_all(&data_dir);
+                    if let Ok(exe) = std::env::current_exe() {
+                        if let Some(bundle) = exe
+                            .ancestors()
+                            .find(|p| p.extension().map_or(false, |e| e == "app"))
+                        {
+                            let _ = fs::remove_dir_all(bundle);
+                        }
+                    }
+                    app.exit(0);
+                }
             }
             _ => {}
         })

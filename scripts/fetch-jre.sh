@@ -37,5 +37,6 @@ fi
 rm -rf src-tauri/resources/runtime
 mkdir -p src-tauri/resources/runtime
 cp -R "$SRC/." src-tauri/resources/runtime/
+chmod -R u+w src-tauri/resources/runtime
 chmod +x src-tauri/resources/runtime/bin/*
 echo ">> JRE terpasang: $(src-tauri/resources/runtime/bin/java -version 2>&1 | head -n1)"
