@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>About</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      height: 100vh; display: flex; align-items: center; justify-content: center;
+    }
+    .card { text-align: center; padding: 24px 30px; width: 100%; }
+    img { width: 72px; height: 72px; border-radius: 16px; margin-bottom: 12px; }
+    h1 { font-size: 16px; font-weight: 700; }
+    .ver { font-size: 11px; color: #64748b; margin: 3px 0 12px; }
+    .hook { font-size: 13px; font-weight: 600; color: #34d399; margin-bottom: 8px; }
+    .body { font-size: 12px; color: #94a3b8; line-height: 1.6; max-width: 320px; margin: 0 auto; }
+    .foot {
+      font-size: 10.5px; color: #475569; margin-top: 16px; padding-top: 12px;
+      border-top: 1px solid #1e293b;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img src="appicon.png" alt="Metabase Desktop" />
+    <h1>Metabase Desktop</h1>
+    <p class="ver">v0.1.0</p>
+    <p class="hook">All the dashboards. None of the setup ritual.</p>
+    <p class="body">
+      It carries everything it needs, fetches its own Metabase, and keeps the
+      boring parts invisible. You bring the questions — it brings the dashboards.
+    </p>
+    <p class="foot">Metabase OSS · AGPL · Built with Tauri</p>
+  </div>
+</body>
+</html>

@@ -1,8 +1,8 @@
 # Metabase Desktop
 
-> Metabase OSS as a real native desktop app. It carries its own Java runtime and
-> fetches the latest Metabase on first launch — **no JDK, no setup, no terminal**.
-> Download the installer, open it, query your data. That's the whole tutorial.
+> Metabase, but as a real desktop app. Setup? Already handled — everything it needs
+> rides in the box, and it fetches the latest Metabase all by itself.
+> You bring the questions, it brings the dashboards.
 
 Built with Tauri 2. The app is ~160MB; `metabase.jar` (~640MB) is **not** baked in —
 it's auto-downloaded once on first run, straight into the data folder.

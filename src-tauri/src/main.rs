@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
-use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -23,6 +23,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 const DEFAULT_PORT: u16 = 9010;
 const DEFAULT_XMX: &str = "1g";
 const METABASE_LATEST_URL: &str = "https://downloads.metabase.com/latest/metabase.jar";
+const GITHUB_LATEST_API: &str = "https://api.github.com/repos/metabase/metabase/releases/latest";
 
 struct AppState {
     child: Mutex<Option<Child>>,
@@ -101,25 +102,89 @@ fn jar_available(app: &AppHandle, data_dir: &PathBuf) -> bool {
     data_dir.join("metabase.jar").exists() || baked_jar(app).is_some()
 }
 
-// Download metabase.jar latest ke `dest` (atomic: tulis ke .download dulu, rename kalau sukses)
-async fn download_jar(app: &AppHandle, dest: &PathBuf) -> Result<(), String> {
-    let _ = app.emit("update-status", "Menghubungkan ke downloads.metabase.com…".to_string());
+// Ask GitHub what the newest OSS release is. None = couldn't tell (offline?).
+async fn latest_release() -> Option<String> {
     let client = reqwest::Client::new();
-    let mut resp = client
-        .get(METABASE_LATEST_URL)
+    let resp = client
+        .get(GITHUB_LATEST_API)
+        .header("User-Agent", "metabase-desktop")
+        .header("Accept", "application/vnd.github+json")
+        .timeout(Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| format!("Gagal download: {e}"))?;
+        .ok()?;
+    let text = resp.text().await.ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(
+        json.get("tag_name")?
+            .as_str()?
+            .trim()
+            .trim_start_matches('v')
+            .to_string(),
+    )
+    .filter(|s| !s.is_empty())
+}
+
+fn pinned_url(version: &str) -> String {
+    format!("https://downloads.metabase.com/v{version}/metabase.jar")
+}
+
+async fn head_content_length(url: &str) -> Option<u64> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .head(url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .ok()?;
+    resp.content_length()
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct JarMeta {
+    version: String,
+    etag: Option<String>,
+    size: u64,
+}
+
+fn meta_path(dest: &PathBuf) -> PathBuf {
+    dest.with_extension("meta.json")
+}
+
+fn save_meta(dest: &PathBuf, meta: &JarMeta) {
+    if let Ok(s) = serde_json::to_string(meta) {
+        let _ = std::fs::write(meta_path(dest), s);
+    }
+}
+
+fn read_meta(dest: &PathBuf) -> Option<JarMeta> {
+    serde_json::from_str(&std::fs::read_to_string(meta_path(dest)).ok()?).ok()
+}
+
+// Download metabase.jar latest ke `dest` (atomic: tulis ke .download dulu, rename kalau sukses)
+async fn download_jar(
+    app: &AppHandle,
+    dest: &PathBuf,
+    url: &str,
+    version: Option<&str>,
+) -> Result<(), String> {
+    let _ = app.emit("update-status", "Connecting to downloads.metabase.com…".to_string());
+    let client = reqwest::Client::new();
+    let mut resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Download failed: {e}"))?;
     let total = resp.content_length();
     let tmp = dest.with_extension("jar.download");
-    let mut file = File::create(&tmp).map_err(|e| format!("Gagal tulis file: {e}"))?;
+    let mut file = File::create(&tmp).map_err(|e| format!("Failed to write file: {e}"))?;
     let mut received: u64 = 0;
     let mut last_emit = Instant::now();
     loop {
         match resp.chunk().await {
             Ok(Some(chunk)) => {
                 file.write_all(&chunk)
-                    .map_err(|e| format!("Gagal tulis file: {e}"))?;
+                    .map_err(|e| format!("Failed to write file: {e}"))?;
                 received += chunk.len() as u64;
                 if last_emit.elapsed() > Duration::from_millis(200) {
                     last_emit = Instant::now();
@@ -129,14 +194,26 @@ async fn download_jar(app: &AppHandle, dest: &PathBuf) -> Result<(), String> {
             Ok(None) => break,
             Err(e) => {
                 let _ = fs::remove_file(&tmp);
-                return Err(format!("Download terputus: {e}"));
+                return Err(format!("Download interrupted: {e}"));
             }
         }
     }
     drop(file);
     let _ = app.emit("update-progress", json!({"received": received, "total": total}));
     let _ = fs::remove_file(dest);
-    fs::rename(&tmp, dest).map_err(|e| format!("Gagal finalisasi jar: {e}"))?;
+    fs::rename(&tmp, dest).map_err(|e| format!("Failed to finalize jar: {e}"))?;
+    save_meta(
+        dest,
+        &JarMeta {
+            version: version.unwrap_or("unknown").to_string(),
+            etag: resp
+                .headers()
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from),
+            size: received,
+        },
+    );
     Ok(())
 }
 
@@ -153,7 +230,7 @@ fn spawn_config_watcher(app: AppHandle) {
                 // debounce: tunggu user beneran selesai edit
                 std::thread::sleep(Duration::from_millis(2000));
                 last = mtime();
-                let _ = app.emit("backend-status", "Config berubah — restart backend…".to_string());
+                let _ = app.emit("backend-status", "Config changed — restarting backend…".to_string());
                 restart_backend(&app);
             }
         }
@@ -392,7 +469,62 @@ async fn run_update(app: AppHandle) {
         let st = app.state::<AppState>();
         st.data_dir.clone()
     };
-    match download_jar(&app, &data_dir.join("metabase.jar")).await {
+    let _ = app.emit(
+        "update-status",
+        "Checking the latest Metabase release…".to_string(),
+    );
+    let latest = match latest_release().await {
+        Some(v) => v,
+        None => {
+            let _ = app.emit(
+                "update-status",
+                "Couldn't check the latest version (offline?). Try again later.".to_string(),
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if let Some(w) = app.get_webview_window("updater") {
+                let _ = w.close();
+            }
+            return;
+        }
+    };
+
+    let dest = data_dir.join("metabase.jar");
+    let current = read_meta(&dest).map(|m| m.version).unwrap_or_default();
+    let current = if current == "unknown" { String::new() } else { current };
+
+    // no version metadata (pre-seeded jar)? cheap size check before pulling 640MB
+    let up_to_date = if !current.is_empty() {
+        current == latest
+    } else if let Ok(local) = fs::metadata(&dest) {
+        head_content_length(METABASE_LATEST_URL)
+            .await
+            .map_or(false, |remote| remote == local.len())
+    } else {
+        false
+    };
+
+    if up_to_date {
+        let have = if current.is_empty() {
+            "your current build".to_string()
+        } else {
+            format!("v{current}")
+        };
+        let _ = app.emit("update-status", format!("You're up to date ✓ ({have})"));
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if let Some(w) = app.get_webview_window("updater") {
+            let _ = w.close();
+        }
+        return;
+    }
+
+    let intro = if current.is_empty() {
+        format!("Metabase v{latest} — downloading…")
+    } else {
+        format!("Metabase v{latest} available (you have v{current}) — downloading…")
+    };
+    let _ = app.emit("update-status", intro);
+
+    match download_jar(&app, &dest, &pinned_url(&latest), Some(&latest)).await {
         Ok(()) => {
             let _ = app.emit(
                 "update-status",
@@ -423,8 +555,20 @@ fn retry_backend(app: AppHandle) {
         let _ = handle.emit("backend-status", "Starting Metabase…");
         let data_dir = handle.state::<AppState>().data_dir.clone();
         if !jar_available(&handle, &data_dir) {
-            let _ = handle.emit("backend-status", "Downloading metabase.jar…".to_string());
-            if let Err(e) = download_jar(&handle, &data_dir.join("metabase.jar")).await {
+            let latest = latest_release().await;
+            let (url, label) = match &latest {
+                Some(v) => (pinned_url(v), format!("v{v}")),
+                None => (METABASE_LATEST_URL.to_string(), "latest".to_string()),
+            };
+            let _ = handle.emit("backend-status", format!("Downloading Metabase {label}…"));
+            if let Err(e) = download_jar(
+                &handle,
+                &data_dir.join("metabase.jar"),
+                &url,
+                latest.as_deref(),
+            )
+            .await
+            {
                 let _ = handle.emit("backend-error", e);
                 return;
             }
@@ -522,8 +666,7 @@ fn main() {
             let (port, xmx) = load_config(&data_dir);
 
             // --- native menu (macOS) ---
-            let about =
-                PredefinedMenuItem::about(app, Some("About Metabase Desktop"), None::<AboutMetadata>)?;
+            let about = MenuItem::with_id(app, "about", "About Metabase Desktop", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let check = MenuItem::with_id(app, "check-updates", "Check for Metabase Updates…", true, None::<&str>)?;
             let restart = MenuItem::with_id(app, "restart-backend", "Restart Backend", true, None::<&str>)?;
@@ -567,14 +710,26 @@ fn main() {
             spawn_config_watcher(handle.clone());
             tauri::async_runtime::spawn(async move {
                 let _ = handle.emit("backend-status", "Preparing environment…");
+                // bersihin sisa download yang kepotong sesi sebelumnya
+                let _ = fs::remove_file(data_dir_for_boot.join("metabase.jar.download"));
                 // preflight: tanpa jar di mana-mana → download sekali di awal
                 if !jar_available(&handle, &data_dir_for_boot) {
+                    let latest = latest_release().await;
+                    let (url, label) = match &latest {
+                        Some(v) => (pinned_url(v), format!("v{v}")),
+                        None => (METABASE_LATEST_URL.to_string(), "latest".to_string()),
+                    };
                     let _ = handle.emit(
                         "backend-status",
-                        "First run: downloading metabase.jar (~640MB) — one time only…".to_string(),
+                        format!("First run: downloading Metabase {label} (~640MB) — one time only…"),
                     );
-                    if let Err(e) =
-                        download_jar(&handle, &data_dir_for_boot.join("metabase.jar")).await
+                    if let Err(e) = download_jar(
+                        &handle,
+                        &data_dir_for_boot.join("metabase.jar"),
+                        &url,
+                        latest.as_deref(),
+                    )
+                    .await
                     {
                         let _ = handle.emit("backend-error", e);
                         return;
@@ -606,6 +761,25 @@ fn main() {
                 });
             }
             "restart-backend" => restart_backend(app),
+            "about" => {
+                match app.get_webview_window("about") {
+                    Some(w) => {
+                        let _ = w.set_focus();
+                    }
+                    None => {
+                        let _ = WebviewWindowBuilder::new(
+                            app,
+                            "about",
+                            WebviewUrl::App("about.html".into()),
+                        )
+                        .title("About Metabase Desktop")
+                        .inner_size(400.0, 340.0)
+                        .resizable(false)
+                        .center()
+                        .build();
+                    }
+                }
+            }
             "reveal-data" => {
                 let dir = app.state::<AppState>().data_dir.display().to_string();
                 let _ = app.opener().open_path(dir, None::<&str>);

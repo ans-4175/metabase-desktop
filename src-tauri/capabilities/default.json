@@ -1,5 +1,5 @@
 {
   "identifier": "splash-capability",
-  "windows": ["splash", "updater", "settings"],
-  "permissions": ["core:default"]
+  "windows": ["splash", "updater", "settings", "about"],
+  "permissions": ["core:default", "core:window:allow-close"]
 }

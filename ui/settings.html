@@ -15,12 +15,12 @@
     .card { width: 100%; padding: 24px 28px; }
     h1 { font-size: 15px; font-weight: 600; margin-bottom: 18px; }
     label { display: block; font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom: 16px; }
-    input {
+    input, select {
       display: block; width: 100%; margin-top: 6px;
       background: #1e293b; border: 1px solid #334155; border-radius: 8px;
       color: #e2e8f0; font-size: 13px; padding: 8px 10px; outline: none;
     }
-    input:focus { border-color: #34d399; }
+    input:focus, select:focus { border-color: #34d399; }
     small { display: block; margin-top: 5px; font-weight: 400; font-size: 11px; color: #64748b; }
     .row { display: flex; gap: 10px; margin-top: 20px; }
     button {
@@ -43,15 +43,13 @@
       <small>Metabase serves on 127.0.0.1 — default 9010. Fails fast if taken.</small>
     </label>
     <label>Max memory (JVM heap)
-      <input id="xmx" list="xmxlist" placeholder="1g" />
-      <datalist id="xmxlist">
-        <option>512m</option>
-        <option>768m</option>
-        <option>1g</option>
-        <option>1500m</option>
-        <option>2g</option>
-      </datalist>
-      <small>-Xmx ceiling, not a reservation — idle Metabase uses ~300–500MB.</small>
+      <select id="xmx">
+        <option value="1g">1 GB — light use, 8GB machine</option>
+        <option value="2g">2 GB — daily driver</option>
+        <option value="4g">4 GB — heavy dashboards</option>
+        <option value="8g">8 GB — go big</option>
+      </select>
+      <small>A ceiling, not a reservation — idle Metabase uses ~300–500MB.</small>
     </label>
     <div class="row">
       <button id="save">Save &amp; Restart</button>
@@ -68,6 +66,13 @@
     invoke('get_config').then((c) => {
       port.value = c.port;
       xmx.value = c.xmx;
+      if (xmx.value !== c.xmx) {
+        const opt = document.createElement('option');
+        opt.value = c.xmx;
+        opt.textContent = c.xmx.toUpperCase() + ' (custom)';
+        xmx.appendChild(opt);
+        xmx.value = c.xmx;
+      }
     });
 
     document.getElementById('save').addEventListener('click', async () => {
