@@ -1,0 +1,13 @@
+# Rust / Tauri
+target/
+src-tauri/gen/
+
+# Bundled assets (di-download via `just setup`, bukan bagian dari repo)
+src-tauri/resources/metabase.jar
+src-tauri/resources/runtime/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store

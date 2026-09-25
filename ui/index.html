@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Metabase Desktop</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      height: 100vh; display: flex; align-items: center; justify-content: center;
+    }
+    .card { text-align: center; padding: 24px; width: 100%; }
+    .logo { font-size: 40px; margin-bottom: 12px; }
+    h1 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+    #status { font-size: 12.5px; color: #94a3b8; min-height: 18px; }
+    .bar {
+      width: 220px; height: 4px; background: #1e293b;
+      border-radius: 99px; margin: 16px auto 0; overflow: hidden;
+    }
+    .bar-fill {
+      width: 40%; height: 100%; background: #34d399; border-radius: 99px;
+      animation: slide 1.2s ease-in-out infinite;
+    }
+    @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
+    .error { margin-top: 14px; }
+    #error-msg {
+      font-size: 12px; color: #f87171; max-width: 380px;
+      margin: 0 auto 10px; white-space: pre-wrap;
+    }
+    button {
+      background: #34d399; border: none; color: #052e1b; font-weight: 600;
+      font-size: 12.5px; padding: 7px 18px; border-radius: 8px; cursor: pointer;
+    }
+    button:hover { background: #6ee7b7; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🗃️</div>
+    <h1>Metabase Desktop</h1>
+    <p id="status">Menyalakan Metabase… biasanya 15–40 detik.</p>
+    <div class="bar" id="bar"><div class="bar-fill"></div></div>
+    <div class="error hidden" id="error">
+      <p id="error-msg"></p>
+      <button id="retry">Coba Lagi</button>
+    </div>
+  </div>
+  <script>
+    const { listen } = window.__TAURI__.event;
+    const { invoke } = window.__TAURI__.core;
+    const statusEl = document.getElementById('status');
+    const bar = document.getElementById('bar');
+    const errorBox = document.getElementById('error');
+    const errorMsg = document.getElementById('error-msg');
+
+    listen('backend-status', (e) => {
+      statusEl.textContent = e.payload;
+      bar.classList.remove('hidden');
+    });
+    listen('backend-error', (e) => {
+      statusEl.textContent = 'Gagal menyalakan Metabase.';
+      errorMsg.textContent = e.payload;
+      bar.classList.add('hidden');
+      errorBox.classList.remove('hidden');
+    });
+    listen('backend-ready', () => {
+      statusEl.textContent = 'Siap! Membuka jendela…';
+      bar.classList.add('hidden');
+    });
+
+    document.getElementById('retry').addEventListener('click', () => {
+      errorBox.classList.add('hidden');
+      statusEl.textContent = 'Menyalakan ulang Metabase…';
+      bar.classList.remove('hidden');
+      invoke('retry_backend');
+    });
+  </script>
+</body>
+</html>
