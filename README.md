@@ -1,6 +1,6 @@
 # Metabase Desktop
 
-<p align="center"><em>All the dashboards. None of the setup ritual.</em></p>
+<p align="center"><em>All the dashboards. Wtihout setup ritual.</em></p>
 
 **Metabase OSS as a real native desktop app** — the kind you double-click.
 It carries its own Java runtime, fetches the latest Metabase for you, and cleans

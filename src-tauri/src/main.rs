@@ -146,7 +146,12 @@ async fn head_content_length(url: &str) -> Option<u64> {
         .send()
         .await
         .ok()?;
-    resp.content_length()
+    // NB: resp.content_length() body size hint — di HEAD sering None/0.
+    // Baca header mentahnya langsung.
+    resp.headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
