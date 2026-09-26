@@ -51,6 +51,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # headless CI has no FUSE — make AppImages (linuxdeploy) extract-and-run
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         with:
           tagName: metabase-desktop-v__VERSION__
           releaseName: "Metabase Desktop v__VERSION__"
