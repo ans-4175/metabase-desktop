@@ -23,7 +23,9 @@ jobs:
             args: ""
           - platform: ubuntu-22.04
             fetch: bash scripts/fetch-jre.sh
-            args: --verbose
+            # appimage excluded: linuxdeploy's ELF scanner chokes on the
+            # bundled JRE (libjvm.so is not resolvable as a system lib)
+            args: --bundles deb,rpm
           - platform: windows-latest
             fetch: pwsh scripts/fetch-jre.ps1
             args: ""
