@@ -37,11 +37,11 @@ So: yes, you can absolutely run the JAR yourself. This repo exists because the
 
 ## Quick start
 
-**Option 1 — installers (easiest):** push a `v*` tag or run the *Release* workflow
-(see [Cross-platform](#cross-platform--releases)) and grab the draft GitHub Release:
-`.dmg` for macOS, `.msi`/`.exe` for Windows, `.deb`/`.AppImage` for Linux.
+> **Just want to use it?** Head to [Releases](../../releases), download the
+> installer for your OS, double-click. That's genuinely it — the first launch
+> fetches Metabase by itself (needs internet once).
 
-**Option 2 — build from source (~10 min, one-time):**
+**Option 1 — build from source (~10 min, one-time):**
 
 ```bash
 git clone <this-repo> && cd metabase-tauri
@@ -117,6 +117,13 @@ shutdown, bundle targets (`"all"`), and a PowerShell JRE fetcher
 In-app: menu → *Uninstall Metabase Desktop…* → confirm. It removes the data
 folder and the app itself. Or `just uninstall`, or manually drag the app to
 Trash + delete the data folder above.
+
+## License
+
+This project is licensed under the **GNU AGPL-3.0** — the same license as
+Metabase OSS, so the two travel together without ambiguity. Note that Metabase
+itself is *not* bundled here: the app downloads the official, unmodified
+`metabase.jar` at runtime, and "Metabase" is a trademark of Metabase, Inc.
 
 ## Notes
 
