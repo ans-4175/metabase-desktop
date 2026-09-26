@@ -101,12 +101,17 @@ file directly and the file watcher applies it too.
 
 The shell is fully cross-platform. `.github/workflows/release.yml` builds and
 attaches installers for **macOS (Apple Silicon)**, **Windows (NSIS/MSI)** and
-**Linux (deb/AppImage)** on every `v*` tag:
+**Linux (deb/rpm)** on every `v*` tag:
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 # → Actions tab → draft release with all installers → publish
 ```
+
+> **Why no Linux AppImage?** linuxdeploy (the AppImage packager) scans every ELF
+> file in the bundle and tries to resolve their system dependencies — it can't
+> handle `libjvm.so`, which lives inside the bundled JRE itself. Debian/Ubuntu
+> users get `.deb`, Fedora/RHEL users get `.rpm`.
 
 Per-OS bits handled in code/config: `java.exe` vs `java` path, Windows process
 shutdown, bundle targets (`"all"`), and a PowerShell JRE fetcher
