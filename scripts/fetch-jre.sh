@@ -27,10 +27,14 @@ tar -xzf "$TMP/jre.tar.gz" -C "$TMP"
 
 SRC="$(find "$TMP" -type d -path '*/Contents/Home' | head -n1)"
 if [[ -z "$SRC" ]]; then
-  SRC="$(find "$TMP" -type d -name Home | head -n1)"
+  # macOS layout not found — Linux/Windows tarballs put bin/ at the top level
+  JAVA_EXE="$(find "$TMP" -type f \( -path '*/bin/java' -o -path '*/bin/java.exe' \) | head -n1)"
+  if [[ -n "$JAVA_EXE" ]]; then
+    SRC="$(dirname "$(dirname "$JAVA_EXE")")"
+  fi
 fi
 if [[ -z "$SRC" ]]; then
-  echo "!! Gagal menemukan Home JRE di dalam tarball"
+  echo "!! Could not find the JRE Home directory inside the tarball"
   exit 1
 fi
 
@@ -39,4 +43,4 @@ mkdir -p src-tauri/resources/runtime
 cp -R "$SRC/." src-tauri/resources/runtime/
 chmod -R u+w src-tauri/resources/runtime
 chmod +x src-tauri/resources/runtime/bin/*
-echo ">> JRE terpasang: $(src-tauri/resources/runtime/bin/java -version 2>&1 | head -n1)"
+echo ">> JRE installed: $(src-tauri/resources/runtime/bin/java -version 2>&1 | head -n1)"
