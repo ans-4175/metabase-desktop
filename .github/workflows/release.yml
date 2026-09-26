@@ -58,7 +58,6 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         with:
           args: ${{ matrix.args }}
-        with:
           tagName: metabase-desktop-v__VERSION__
           releaseName: "Metabase Desktop v__VERSION__"
           releaseBody: "Installers with a bundled JRE 21 — no Java install needed. The Metabase JAR (~640MB) is fetched automatically on first launch. macOS build is Apple Silicon for now."
