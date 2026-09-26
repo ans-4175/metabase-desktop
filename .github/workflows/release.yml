@@ -20,10 +20,13 @@ jobs:
         include:
           - platform: macos-14 # Apple Silicon
             fetch: bash scripts/fetch-jre.sh
+            args: ""
           - platform: ubuntu-22.04
             fetch: bash scripts/fetch-jre.sh
+            args: --verbose
           - platform: windows-latest
             fetch: pwsh scripts/fetch-jre.ps1
+            args: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -53,6 +56,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # headless CI has no FUSE — make AppImages (linuxdeploy) extract-and-run
           APPIMAGE_EXTRACT_AND_RUN: "1"
+        with:
+          args: ${{ matrix.args }}
         with:
           tagName: metabase-desktop-v__VERSION__
           releaseName: "Metabase Desktop v__VERSION__"
